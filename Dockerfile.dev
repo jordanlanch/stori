@@ -1,0 +1,33 @@
+# Start from golang base image
+FROM golang:1.20-alpine
+
+# Update Alpine
+RUN apk update
+
+# Install utils packages.
+RUN apk add --no-cache git build-base
+
+# Set the current working directory inside the container
+WORKDIR /go/src/github.com/jordanlanch/stori-test
+
+# Copy go mod and sum files
+COPY go.mod go.sum ./
+
+# Download all dependencies. Dependencies will be cached if the go.mod and the go.sum files are not changed
+RUN go mod download
+
+# Install utilities
+RUN go get -v github.com/bokwoon95/wgo@latest && go install github.com/bokwoon95/wgo@latest
+RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+
+# Copy the rest of the application code
+COPY . .
+
+# Give execute permissions to the entrypoint script
+RUN chmod +x /go/src/github.com/jordanlanch/stori-test/scripts/entrypoint.sh
+
+ENV GIN_MODE="debug"
+
+EXPOSE 8080
+
+ENTRYPOINT ["/go/src/github.com/jordanlanch/stori-test/scripts/entrypoint.sh"]

@@ -1,0 +1,57 @@
+name: "Check Testing"
+on: push
+
+jobs:
+  unit_e2e_testing:
+    name: Tests Unit + E2E
+    runs-on: ubuntu-latest
+    env:
+      STANDARD_MIN_COVERAGE: "80"
+      APP_ENV: test
+      SERVER_ADDRESS: ":8080"
+      PORT: 8080
+      CONTEXT_TIMEOUT: 2
+      REDIS_HOST: "redis"
+      REDIS_PORT: 6379
+      IS_SANDOX: false
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v3
+      - uses: actions/setup-go@v3
+        with:
+          go-version: "1.17"
+          cache: true
+      - name: Delete Fixtures if IS_SANDOX is false
+        run: |
+            if [ ${IS_SANDOX} == false ]; then
+              rm -rf test/fixtures
+              echo "Fixtures is deleted"
+            fi
+      - name: "test"
+        run: make test
+
+  build_and_push:
+    needs: unit_e2e_testing
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-go@v3
+        with:
+          go-version: 1.19
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: jordanlanch/stori:latest, jordanlanch/stori:${{ github.sha }}
