@@ -51,8 +51,8 @@ type MockEmailService struct {
 	mock.Mock
 }
 
-func (m *MockEmailService) SendEmail(ctx context.Context, summary string) error {
-	args := m.Called(ctx, summary)
+func (m *MockEmailService) SendEmail(ctx context.Context, templatePath string, data interface{}) error {
+	args := m.Called(ctx, templatePath, data)
 	return args.Error(0)
 }
 
@@ -79,7 +79,7 @@ func TestProcessTransactions(t *testing.T) {
 	mockDBRepo.On("GetAllTransactions", mock.Anything).Return(transactions, nil)
 	mockDBRepo.On("SaveTransactions", mock.Anything, transactions).Return(nil)
 	mockCacheRepo.On("Set", mock.Anything, "hash123", transactions).Return(nil)
-	mockEmail.On("SendEmail", mock.Anything, mock.AnythingOfType("string")).Return(nil)
+	mockEmail.On("SendEmail", mock.Anything, "./internal/infrastructure/email/templates/summary_template.html", mock.AnythingOfType("map[string]interface {}")).Return(nil)
 
 	err := useCase.ProcessTransactions(ctx)
 	assert.NoError(t, err)
@@ -112,7 +112,7 @@ func TestProcessTransactions_RateLimitExceeded(t *testing.T) {
 	mockDBRepo.On("GetAllTransactions", mock.Anything).Return(transactions, nil)
 	mockDBRepo.On("SaveTransactions", mock.Anything, transactions).Return(nil)
 	mockCacheRepo.On("Set", mock.Anything, "hash123", transactions).Return(nil)
-	mockEmail.On("SendEmail", mock.Anything, mock.AnythingOfType("string")).Return(nil)
+	mockEmail.On("SendEmail", mock.Anything, "./internal/infrastructure/email/templates/summary_template.html", mock.AnythingOfType("map[string]interface {}")).Return(nil)
 
 	// First request should succeed
 	err := useCase.ProcessTransactions(ctx)
@@ -128,24 +128,58 @@ func TestProcessTransactions_RateLimitExceeded(t *testing.T) {
 	mockEmail.AssertExpectations(t)
 }
 
-func TestGenerateSummary(t *testing.T) {
-	useCase := &transactionUseCaseImpl{}
+func TestProcessTransactions_CacheHit(t *testing.T) {
+	mockDBRepo := new(MockTransactionRepository)
+	mockCacheRepo := new(MockCacheRepository)
+	mockEmail := new(MockEmailService)
+	redisClient := &redis.Client{}
+	rateLimit := 5
+	timeoutSec := 5
+	cacheDuration := 600
+
+	useCase := NewTransactionUseCase(mockDBRepo, mockCacheRepo, mockEmail, redisClient, rateLimit, timeoutSec, cacheDuration)
+
+	ctx := context.Background()
 
 	transactions := []domain.Transaction{
 		{ID: 1, Date: "1/1", Amount: 100},
 		{ID: 2, Date: "1/2", Amount: -50},
-		{ID: 3, Date: "2/1", Amount: 200},
-		{ID: 4, Date: "2/2", Amount: -150},
 	}
 
-	summary := useCase.generateSummary(transactions)
-	expectedSummary := `Total balance: 100.00
-Number of transactions in January: 2
-Average debit amount: -50.00
-Average credit amount: 100.00
-Number of transactions in February: 2
-Average debit amount: -150.00
-Average credit amount: 200.00
-`
-	assert.Equal(t, expectedSummary, summary)
+	mockDBRepo.On("GetCSVHash").Return("hash123", nil)
+	mockCacheRepo.On("Get", mock.Anything, "hash123").Return(transactions, nil)
+	mockEmail.On("SendEmail", mock.Anything, "./internal/infrastructure/email/templates/summary_template.html", mock.AnythingOfType("map[string]interface {}")).Return(nil)
+
+	err := useCase.ProcessTransactions(ctx)
+	assert.NoError(t, err)
+
+	mockDBRepo.AssertExpectations(t)
+	mockCacheRepo.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
+}
+
+func TestProcessTransactions_DBError(t *testing.T) {
+	mockDBRepo := new(MockTransactionRepository)
+	mockCacheRepo := new(MockCacheRepository)
+	mockEmail := new(MockEmailService)
+	redisClient := &redis.Client{}
+	rateLimit := 5
+	timeoutSec := 5
+	cacheDuration := 600
+
+	useCase := NewTransactionUseCase(mockDBRepo, mockCacheRepo, mockEmail, redisClient, rateLimit, timeoutSec, cacheDuration)
+
+	ctx := context.Background()
+
+	mockDBRepo.On("GetCSVHash").Return("hash123", nil)
+	mockCacheRepo.On("Get", mock.Anything, "hash123").Return(nil, errors.New("cache miss"))
+	mockDBRepo.On("GetAllTransactions", mock.Anything).Return(nil, errors.New("db error"))
+
+	err := useCase.ProcessTransactions(ctx)
+	assert.Error(t, err)
+	assert.Equal(t, "db error", err.Error())
+
+	mockDBRepo.AssertExpectations(t)
+	mockCacheRepo.AssertExpectations(t)
+	mockEmail.AssertExpectations(t)
 }

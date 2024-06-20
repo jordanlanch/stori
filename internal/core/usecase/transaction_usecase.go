@@ -30,7 +30,7 @@ type CacheRepository interface {
 }
 
 type EmailService interface {
-	SendEmail(ctx context.Context, summary string) error
+	SendEmail(ctx context.Context, templatePath string, data interface{}) error
 }
 
 type transactionUseCaseImpl struct {
@@ -71,8 +71,8 @@ func (uc *transactionUseCaseImpl) ProcessTransactions(ctx context.Context) error
 
 	transactions, err := uc.CacheRepo.Get(ctx, hash)
 	if err == nil && transactions != nil {
-		summary := uc.generateSummary(transactions)
-		return uc.Email.SendEmail(ctx, summary)
+		summary := uc.generateHTMLSummary(transactions)
+		return uc.Email.SendEmail(ctx, "./internal/infrastructure/email/templates/summary_template.html", summary)
 	}
 
 	transactions, err = uc.DBRepo.GetAllTransactions(ctx)
@@ -90,11 +90,11 @@ func (uc *transactionUseCaseImpl) ProcessTransactions(ctx context.Context) error
 		return err
 	}
 
-	summary := uc.generateSummary(transactions)
-	return uc.Email.SendEmail(ctx, summary)
+	summary := uc.generateHTMLSummary(transactions)
+	return uc.Email.SendEmail(ctx, "./internal/infrastructure/email/templates/summary_template.html", summary)
 }
 
-func (uc *transactionUseCaseImpl) generateSummary(transactions []domain.Transaction) string {
+func (uc *transactionUseCaseImpl) generateHTMLSummary(transactions []domain.Transaction) map[string]interface{} {
 	var totalBalance float64
 	monthlyTransactions := make(map[string][]domain.Transaction)
 
@@ -112,7 +112,6 @@ func (uc *transactionUseCaseImpl) generateSummary(transactions []domain.Transact
 		monthlyTransactions[monthName] = append(monthlyTransactions[monthName], t)
 	}
 
-	// Ordenar los meses
 	months := make([]string, 0, len(monthlyTransactions))
 	for month := range monthlyTransactions {
 		months = append(months, month)
@@ -123,7 +122,11 @@ func (uc *transactionUseCaseImpl) generateSummary(transactions []domain.Transact
 		return mi.Month() < mj.Month()
 	})
 
-	summary := fmt.Sprintf("Total balance: %.2f\n", totalBalance)
+	summary := map[string]interface{}{
+		"TotalBalance": totalBalance,
+		"MonthlyData":  make([]map[string]interface{}, 0),
+	}
+
 	for _, month := range months {
 		txns := monthlyTransactions[month]
 		var creditSum, debitSum float64
@@ -136,28 +139,38 @@ func (uc *transactionUseCaseImpl) generateSummary(transactions []domain.Transact
 			wg.Add(1)
 			go func(t domain.Transaction) {
 				defer wg.Done()
+				mu.Lock()
 				if t.Amount > 0 {
-					mu.Lock()
 					creditSum += t.Amount
 					creditCount++
-					mu.Unlock()
 				} else {
-					mu.Lock()
 					debitSum += t.Amount
 					debitCount++
-					mu.Unlock()
 				}
+				mu.Unlock()
 			}(t)
 		}
 		wg.Wait()
 
-		summary += fmt.Sprintf("Number of transactions in %s: %d\n", month, len(txns))
+		monthData := map[string]interface{}{
+			"Month":         month,
+			"Transactions":  len(txns),
+			"DebitSum":      debitSum,
+			"DebitCount":    debitCount,
+			"CreditSum":     creditSum,
+			"CreditCount":   creditCount,
+			"AverageDebit":  0.0,
+			"AverageCredit": 0.0,
+		}
+
 		if debitCount > 0 {
-			summary += fmt.Sprintf("Average debit amount: %.2f\n", debitSum/float64(debitCount))
+			monthData["AverageDebit"] = debitSum / float64(debitCount)
 		}
 		if creditCount > 0 {
-			summary += fmt.Sprintf("Average credit amount: %.2f\n", creditSum/float64(creditCount))
+			monthData["AverageCredit"] = creditSum / float64(creditCount)
 		}
+
+		summary["MonthlyData"] = append(summary["MonthlyData"].([]map[string]interface{}), monthData)
 	}
 
 	return summary

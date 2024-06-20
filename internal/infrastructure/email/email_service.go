@@ -1,9 +1,10 @@
 package email
 
 import (
+	"bytes"
 	"context"
-	"fmt"
-	"log"
+	"errors"
+	"html/template"
 	"net/smtp"
 	"os"
 	"sync"
@@ -20,14 +21,9 @@ func NewEmailService() *EmailService {
 	}
 }
 
-func (s *EmailService) SendEmail(ctx context.Context, summary string) error {
+func (s *EmailService) SendEmail(ctx context.Context, templatePath string, data interface{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if os.Getenv("FAKE_EMAIL") == "true" {
-		printFakeEmail(summary)
-		return nil
-	}
 
 	from := os.Getenv("EMAIL_FROM")
 	to := os.Getenv("EMAIL_TO")
@@ -35,28 +31,45 @@ func (s *EmailService) SendEmail(ctx context.Context, summary string) error {
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 
-	auth := smtp.PlainAuth("", from, password, smtpHost)
-	msg := buildEmailMessage(from, to, summary)
+	if from == "" || to == "" || password == "" || smtpHost == "" || smtpPort == "" {
+		return errors.New("missing required environment variables for email configuration")
+	}
 
-	err := s.sendMailFn(smtpHost+":"+smtpPort, auth, from, []string{to}, []byte(msg))
+	auth := smtp.PlainAuth("", from, password, smtpHost)
+	msg, err := buildEmailMessage(templatePath, data)
 	if err != nil {
-		log.Fatal(err)
+		return err
+	}
+
+	// Guardar el mensaje como un archivo HTML
+	err = os.WriteFile("./internal/infrastructure/email/output_email/email_output.html", msg, 0644)
+	if err != nil {
+		return err
+	}
+
+	if s.sendMailFn == nil {
+		return errors.New("sendMailFn is not initialized")
+	}
+
+	err = s.sendMailFn(smtpHost+":"+smtpPort, auth, from, []string{to}, msg)
+	if err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func printFakeEmail(summary string) {
-	log.Println("============================================================")
-	log.Println("                   FAKE EMAIL ENABLED                       ")
-	log.Println("============================================================")
-	log.Println("To: recipient@example.com")
-	log.Println("Subject: Monthly Transaction Summary")
-	log.Println("------------------------------------------------------------")
-	log.Println(summary)
-	log.Println("============================================================")
-}
+func buildEmailMessage(templatePath string, data interface{}) ([]byte, error) {
+	tmpl, err := template.ParseFiles(templatePath)
+	if err != nil {
+		return nil, err
+	}
 
-func buildEmailMessage(from, to, summary string) string {
-	return fmt.Sprintf("To: %s\r\nSubject: Monthly Transaction Summary\r\n\r\n%s\r\n", to, summary)
+	var body bytes.Buffer
+	err = tmpl.Execute(&body, data)
+	if err != nil {
+		return nil, err
+	}
+
+	return body.Bytes(), nil
 }
