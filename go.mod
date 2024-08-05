@@ -8,7 +8,7 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/spf13/viper v1.14.0
 	github.com/stretchr/testify v1.8.3
-	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
+	golang.org/x/time v0.6.0
 	gopkg.in/dnaeon/go-vcr.v3 v3.1.2
 	gorm.io/driver/postgres v1.5.9
 	gorm.io/driver/sqlite v1.5.6
